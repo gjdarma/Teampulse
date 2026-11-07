@@ -10,7 +10,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 const md = (s) => esc(s).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/\*(.+?)\*/g, "<em>$1</em>");
 const fmt = (x, d = 1) => (x == null ? "–" : Number(x).toFixed(d));
 const origin = location.origin;
-const surveyUrl = (id) => `${origin}/#/s/${id}`;
+const surveyUrl = (id) => `${origin}/s/${id}`;
 const dashUrl = (id, key) => `${origin}/#/d/${id}/${key}`;
 const store = {
   get(k, d = null) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } },
@@ -64,6 +64,11 @@ function setNav(name) {
 function render(html) { app.innerHTML = html; window.scrollTo(0, 0); }
 
 // ---------- router ----------
+// Support clean links (/s/ABC123) as well as hash links (/#/s/ABC123).
+(function normaliseCleanLink() {
+  const m = location.pathname.match(/^\/(s|d|self)\/(.+)$/);
+  if (m) history.replaceState(null, "", `/#/${m[1]}/${m[2]}`);
+})();
 async function route() {
   document.body.classList.remove("present");
   const parts = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);

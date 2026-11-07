@@ -5,3 +5,19 @@
 [functions]
   directory = "netlify/functions"
   node_bundler = "esbuild"
+
+# Clean short links, e.g. /s/79GA3M and /d/ID/KEY, served by the single-page app
+[[redirects]]
+  from = "/s/*"
+  to = "/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/d/*"
+  to = "/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/self/*"
+  to = "/index.html"
+  status = 200
