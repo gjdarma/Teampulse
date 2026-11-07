@@ -1,4 +1,4 @@
-import { SCALE, SECTIONS, OPEN_QUESTIONS, ALL_ITEMS, BANDS, MIN_RESPONSES } from "./questions.js";
+import { SCALE, SECTIONS, OPEN_QUESTIONS, LEADER_QUESTIONS, FREQ_QUESTIONS, FREQ_OPTIONS, MIN_RESPONSES } from "./questions.js";
 import { CARDS, MOVES } from "./learn.js";
 import qrcode from "./vendor/qrcode.js";
 
@@ -188,8 +188,9 @@ async function survey(id, kind) {
 
   const doneKey = `tp_done_${id}_${team.round}_${kind}`;
   const draftKey = `tp_draft_${id}_${kind}`;
-  const state = store.sget(draftKey, { step: 0, answers: {}, open: {} });
-  const steps = ["intro", ...SECTIONS.map((s) => s.id), "open"];
+  const state = store.sget(draftKey, { step: 0, answers: {}, open: {}, freq: {} });
+  state.freq = state.freq || {};
+  const steps = ["intro", ...SECTIONS.map((s) => s.id), "feedback", "open"];
   const save = () => store.sset(draftKey, state);
 
   if (kind === "member" && store.get(doneKey)) {
@@ -206,20 +207,32 @@ async function survey(id, kind) {
         <h1>${esc(team.name)}</h1>
         ${kind === "self"
           ? `<p class="lede">Rate the team as you honestly see it right now. Later you'll compare your view with your team's anonymous view. The gap is where the learning is.</p>`
-          : `<p class="lede">21 short statements about how this team works. About 5 minutes.</p>
+          : `<p class="lede">21 short statements about how this team works, two quick questions about feedback, and a few optional comments. About 7 minutes.</p>
              <div class="callout" style="margin:18px 0"><strong>It's anonymous.</strong> No names are recorded, and your leader only sees combined results once at least ${MIN_RESPONSES} people have answered.<br><br><strong>Be honest rather than kind.</strong> A generous answer feels nice but doesn't help the team get better.</div>`}
         <div class="btn-row"><button class="btn btn-gold" id="next">Start</button></div></div>`);
+    } else if (step === "feedback") {
+      render(`<div class="wrap narrow section"><div class="progress"><div style="width:${pct}%"></div></div>
+        <div class="eyebrow">Feedback</div><h2>Feedback in your work</h2><p class="muted">${kind === "self" ? "Answer for yourself." : "There are no wrong answers. Most people find these hard to answer."}</p>
+        <div class="card">${FREQ_QUESTIONS.map((q) => `<div class="q"><p>${esc(q.text)}</p><div class="scale freq">${FREQ_OPTIONS.map((o) => `<button data-f="${q.id}" data-v="${o.value}" class="${state.freq[q.id] === o.value ? "on" : ""}">${o.label}</button>`).join("")}</div></div>`).join("")}</div>
+        <div class="survey-nav"><button class="btn btn-ghost" id="back">Back</button><button class="btn btn-navy" id="next">Next</button></div><p id="msg" class="muted small"></p></div>`);
+      app.querySelectorAll("[data-f]").forEach((b) => b.onclick = () => {
+        state.freq[b.dataset.f] = Number(b.dataset.v); save();
+        app.querySelectorAll(`[data-f="${b.dataset.f}"]`).forEach((x) => x.classList.toggle("on", x === b));
+      });
     } else if (step === "open") {
+      const qs = kind === "self" ? OPEN_QUESTIONS : [...OPEN_QUESTIONS, ...LEADER_QUESTIONS];
       render(`<div class="wrap narrow section"><div class="progress"><div style="width:${pct}%"></div></div>
         <div class="eyebrow">Last bit (optional)</div><h2>In your own words</h2>
         ${OPEN_QUESTIONS.map((q) => `<div style="margin:18px 0"><label for="${q.id}">${esc(q.text)}</label><textarea id="${q.id}" maxlength="600">${esc(state.open[q.id] || "")}</textarea></div>`).join("")}
+        ${kind === "self" ? "" : `<div class="callout navy" style="margin-top:26px"><strong>Feedback for our team leader.</strong> Your leader has asked for this. It's anonymous, and specific is more useful than general.</div>
+        ${LEADER_QUESTIONS.map((q) => `<div style="margin:18px 0"><label for="${q.id}">${esc(q.text)}</label><textarea id="${q.id}" maxlength="600">${esc(state.open[q.id] || "")}</textarea></div>`).join("")}`}
         <div class="survey-nav"><button class="btn btn-ghost" id="back">Back</button><button class="btn btn-gold" id="submit">Submit</button></div><p id="msg" class="muted small"></p></div>`);
-      OPEN_QUESTIONS.forEach((q) => { document.getElementById(q.id).oninput = (e) => { state.open[q.id] = e.target.value; save(); }; });
+      qs.forEach((q) => { document.getElementById(q.id).oninput = (e) => { state.open[q.id] = e.target.value; save(); }; });
       document.getElementById("submit").onclick = submit;
     } else {
       const sec = SECTIONS.find((s) => s.id === step);
       render(`<div class="wrap narrow section"><div class="progress"><div style="width:${pct}%"></div></div>
-        <div class="eyebrow">${state.step} of ${SECTIONS.length}</div>
+        <div class="eyebrow">${state.step} of ${steps.length - 2}</div>
         <h2>${esc(sec.title)}</h2><p class="muted">${esc(sec.blurb)}</p>
         <div class="card">${sec.items.map((it) => `
           <div class="q"><p>${esc(it.text)}</p><div class="scale">${SCALE.map((o) => `<button data-q="${it.id}" data-v="${o.value}" class="${state.answers[it.id] === o.value ? "on" : ""}">${o.label}</button>`).join("")}</div></div>`).join("")}
@@ -233,7 +246,9 @@ async function survey(id, kind) {
     }
     const next = document.getElementById("next");
     if (next) next.onclick = () => {
-      if (step !== "intro") {
+      if (step === "feedback") {
+        if (FREQ_QUESTIONS.some((q) => !state.freq[q.id])) return (document.getElementById("msg").textContent = "Please answer both questions.");
+      } else if (step !== "intro") {
         const sec = SECTIONS.find((s) => s.id === step);
         const missing = sec.items.filter((i) => !state.answers[i.id]);
         if (missing.length) return (document.getElementById("msg").textContent = "Please answer each statement before moving on.");
@@ -248,7 +263,7 @@ async function survey(id, kind) {
     const btn = document.getElementById("submit");
     btn.disabled = true; btn.textContent = "Submitting…";
     try {
-      await api("POST", `/teams/${id}/responses`, { kind, answers: state.answers, open: state.open }, key);
+      await api("POST", `/teams/${id}/responses`, { kind, answers: state.answers, freq: state.freq, open: state.open }, key);
       store.set(doneKey, true);
       try { sessionStorage.removeItem(draftKey); } catch {}
       if (kind === "self") {
@@ -336,6 +351,7 @@ function tabOverview(panel, ctx) {
   </div>
   <div class="card" style="margin-top:18px"><p style="margin:0">${esc(data.teamBand?.text || "")}</p><p class="muted small" style="margin:8px 0 0">Score bands follow the structure of Macklin &amp; Zbar's team self-assessment (Driving School Improvement, 2020).</p></div>
   <div style="margin-top:18px">${niceHtml}</div>
+  ${feedbackCulture(data)}
   <div class="grid g2" style="margin-top:18px">
     <div class="card"><h3>By area</h3>${legend(data.previous)}<div class="bars" style="margin-top:14px">${SECTIONS.map((s) => bar(s.title, data.sections[s.id].mean, data.sections[s.id].self, prevSec[s.id]?.mean)).join("")}</div></div>
     <div class="card"><h3>Biggest gaps: you vs team</h3>${data.gaps.length ? `<ul class="gap-list">${data.gaps.slice(0, 6).map((g) => `<li><span class="gap-chip ${g.gap < 0 ? "neg" : ""}">${g.gap > 0 ? "+" : ""}${fmt(g.gap, 1)}</span><span>${esc(g.text)}<br><span class="muted small">You ${g.self} · Team ${fmt(g.team, 1)}</span></span></li>`).join("")}</ul><p class="muted small">Positive means you rated it higher than your team did.</p>` : `<p class="muted">Do your self-rating to see where your view differs from your team's.</p>`}</div>
@@ -344,6 +360,18 @@ function tabOverview(panel, ctx) {
   <p class="muted">Small moves for your two lowest-scoring areas. Add any of them to your action register.</p>
   ${lowest.map(({ s, m }) => `<h3 style="margin-top:22px">${esc(s.title)} <span class="muted small">(${fmt(m, 2)})</span></h3><div class="grid g2">${(MOVES[s.id] || []).map((mv) => moveCard(mv, s.id)).join("")}</div>`).join("")}`;
   wireMoves(panel, ctx);
+}
+
+function feedbackCulture(data) {
+  if (!data.freq) return "";
+  const block = (q) => {
+    const f = data.freq[q.id]; if (!f || !f.n) return "";
+    const stale = f.dist[2] + f.dist[3] + f.dist[4];
+    return `<div><h4 style="margin:0 0 6px;color:var(--navy)">${esc(q.text)}</h4>
+      <p class="small muted" style="margin:0 0 10px"><strong style="color:var(--ink)">${stale} of ${f.n}</strong> said more than a term ago or couldn't remember.${f.self ? ` You: ${esc(FREQ_OPTIONS[f.self - 1].label.toLowerCase())}.` : ""}</p>
+      <div class="bars">${FREQ_OPTIONS.map((o, i) => bar(o.label, null, null, null, `${f.dist[i]}`).replace('<div class="track">', `<div class="track"><div class="fill" style="width:${(f.dist[i] / f.n) * 100}%;background:${i < 2 ? "var(--navy)" : i < 4 ? "#9db8de" : "var(--red)"}"></div>`)).join("")}</div></div>`;
+  };
+  return `<div class="card" style="margin-top:18px"><h3>Feedback culture</h3><p class="muted small">How recently people in this team received and gave honest feedback.</p><div class="grid g2" style="margin-top:12px">${FREQ_QUESTIONS.map(block).join("")}</div></div>`;
 }
 
 function moveCard(mv, sectionId) {
@@ -383,7 +411,8 @@ function tabStatements(panel, ctx) {
 
 function tabComments(panel, ctx) {
   const { data } = ctx;
-  panel.innerHTML = `<div class="grid g2">${OPEN_QUESTIONS.map((q) => `<div class="card"><h3>${esc(q.text)}</h3>${(data.comments[q.id] || []).length ? data.comments[q.id].map((c) => `<div class="comment">${esc(c)}</div>`).join("") : `<p class="muted">No comments yet.</p>`}</div>`).join("")}</div>
+  const lead = LEADER_QUESTIONS.some((q) => (data.comments[q.id] || []).length);
+  panel.innerHTML = `${lead ? `<div class="callout navy" style="margin-bottom:18px"><strong>Feedback for you, the team leader.</strong> You asked for this, so thank your team for it, and tell them one thing you'll do with it.</div><div class="grid g2" style="margin-bottom:26px">${LEADER_QUESTIONS.map((q) => `<div class="card"><h3>${esc(q.text)}</h3>${(data.comments[q.id] || []).length ? data.comments[q.id].map((c) => `<div class="comment">${esc(c)}</div>`).join("") : `<p class="muted">No comments yet.</p>`}</div>`).join("")}</div>` : ""}<div class="grid g2">${OPEN_QUESTIONS.map((q) => `<div class="card"><h3>${esc(q.text)}</h3>${(data.comments[q.id] || []).length ? data.comments[q.id].map((c) => `<div class="comment">${esc(c)}</div>`).join("") : `<p class="muted">No comments yet.</p>`}</div>`).join("")}</div>
   <p class="muted small" style="margin-top:12px">Comments are shown in random order so they can't be matched to response times.</p>`;
 }
 

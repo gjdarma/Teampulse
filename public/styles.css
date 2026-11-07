@@ -180,3 +180,5 @@ body.present .stat { font-size: 64px; }
   .reg-table .hide-sm { display: none; }
   .hero { padding: 44px 0 50px; }
 }
+.scale.freq { grid-template-columns: 1fr; }
+.scale.freq button { min-height: 44px; text-align: left; padding: 10px 16px; }

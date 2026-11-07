@@ -100,6 +100,25 @@ export const OPEN_QUESTIONS = [
   { id: "o2", text: "What is one change that would make this team more effective?" },
 ];
 
+// Feedback for the team leader: asked of team members only, never the leader.
+export const LEADER_QUESTIONS = [
+  { id: "o3", text: "One thing our team leader should keep doing when leading this team." },
+  { id: "o4", text: "One thing our team leader could do differently when leading this team." },
+];
+
+// Feedback culture: how recently feedback was received and given.
+export const FREQ_OPTIONS = [
+  { value: 1, label: "Within the last month" },
+  { value: 2, label: "Within the last term" },
+  { value: 3, label: "Within the last year" },
+  { value: 4, label: "Longer ago than that" },
+  { value: 5, label: "I can't remember" },
+];
+export const FREQ_QUESTIONS = [
+  { id: "f1", text: "When did you last receive meaningful professional feedback on your own work?" },
+  { id: "f2", text: "When did you last give a colleague in this team honest feedback about their work?" },
+];
+
 export const ALL_ITEMS = SECTIONS.flatMap((s) => s.items.map((i) => ({ ...i, section: s.id })));
 export const TEAM_ITEM_IDS = SECTIONS.filter((s) => s.part === "team").flatMap((s) => s.items.map((i) => i.id));
 export const TRUST_SECTIONS = SECTIONS.filter((s) => s.part === "trust");

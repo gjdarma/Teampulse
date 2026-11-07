@@ -5,7 +5,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import {
-  ALL_ITEMS, TEAM_ITEM_IDS, TRUST_SECTIONS, SECTIONS, OPEN_QUESTIONS, bandFor, MIN_RESPONSES,
+  ALL_ITEMS, TEAM_ITEM_IDS, TRUST_SECTIONS, SECTIONS, OPEN_QUESTIONS, LEADER_QUESTIONS, FREQ_QUESTIONS, FREQ_OPTIONS, bandFor, MIN_RESPONSES,
 } from "../../public/questions.js";
 
 // ---------- storage (Netlify Blobs, or local files for development) ----------
@@ -38,7 +38,8 @@ const hash = (s) => createHash("sha256").update(String(s)).digest("hex");
 const ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no 0/O/1/I
 const newTeamId = () => Array.from(randomBytes(6), (b) => ALPHABET[b % ALPHABET.length]).join("");
 const VALID_IDS = new Set(ALL_ITEMS.map((i) => i.id));
-const OPEN_IDS = new Set(OPEN_QUESTIONS.map((q) => q.id));
+const OPEN_IDS = new Set([...OPEN_QUESTIONS, ...LEADER_QUESTIONS].map((q) => q.id));
+const FREQ_IDS = new Set(FREQ_QUESTIONS.map((q) => q.id));
 
 async function readBody(req) {
   const text = await req.text();
@@ -53,6 +54,15 @@ function cleanAnswers(raw) {
     if (VALID_IDS.has(k) && Number.isInteger(n) && n >= 1 && n <= 4) answers[k] = n;
   }
   return answers;
+}
+
+function cleanFreq(raw) {
+  const out = {};
+  for (const [k, v] of Object.entries(raw || {})) {
+    const n = Number(v);
+    if (FREQ_IDS.has(k) && Number.isInteger(n) && n >= 1 && n <= FREQ_OPTIONS.length) out[k] = n;
+  }
+  return out;
 }
 
 function cleanOpen(raw) {
@@ -120,11 +130,17 @@ export function aggregate(responses, self) {
     .map((it) => ({ id: it.id, text: it.text, self: items[it.id].self, team: items[it.id].mean, gap: round2(items[it.id].self - items[it.id].mean) }))
     .sort((a, b) => Math.abs(b.gap) - Math.abs(a.gap));
 
+  const freq = {};
+  for (const q of FREQ_QUESTIONS) {
+    const vals = responses.map((r) => r.freq?.[q.id]).filter((v) => v != null);
+    freq[q.id] = { n: vals.length, dist: FREQ_OPTIONS.map((o) => vals.filter((x) => x === o.value).length), self: self?.freq?.[q.id] ?? null };
+  }
+
   const comments = {};
-  for (const q of OPEN_QUESTIONS) comments[q.id] = shuffle(responses.map((r) => r.open?.[q.id]).filter(Boolean));
+  for (const q of [...OPEN_QUESTIONS, ...LEADER_QUESTIONS]) comments[q.id] = shuffle(responses.map((r) => r.open?.[q.id]).filter(Boolean));
 
   return {
-    n, items, sections, legs, nice, gaps, comments,
+    n, items, sections, legs, nice, gaps, comments, freq,
     teamScore, teamBand: teamScore != null ? bandFor(teamScore) : null,
     selfScore, selfBand: selfScore != null ? bandFor(selfScore) : null,
   };
@@ -165,8 +181,9 @@ export default async (req) => {
       const answers = cleanAnswers(body.answers);
       if (Object.keys(answers).length < Math.ceil(ALL_ITEMS.length * 0.8))
         return err("Please answer at least most of the statements before submitting.");
-      const record = { answers, open: cleanOpen(body.open), at: new Date().toISOString().slice(0, 10) };
+      const record = { answers, freq: cleanFreq(body.freq), open: cleanOpen(body.open), at: new Date().toISOString().slice(0, 10) };
       if (body.kind === "self") {
+        delete record.open.o3; delete record.open.o4;
         if (!isAdmin(team, req)) return err("Only the team leader can submit the self-rating.", 403);
         await s.setJSON(`self/${id}/${team.round}`, record);
       } else {
