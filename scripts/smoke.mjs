@@ -32,3 +32,18 @@ assert((await call2("PUT", `/api/teams/${teamId}/register`, { version: 0, items:
 const nr = await call("POST", `/api/teams/${teamId}/rounds`, null, adminKey);
 assert(nr.body.round === 2, "new round");
 console.log("ALL PASSED");
+// diagnosis + meetings
+{
+  const { STAGE_FEATURE_IDS } = await import("../public/stages.js");
+  const t2 = await call("POST", "/api/teams", { name: "Diag test" }); const K = t2.body.adminKey, I = t2.body.teamId;
+  const req2 = async (method, p, body) => { const r = await h(new Request("http://x" + p, { method, headers: { "content-type": "application/json", "x-admin-key": K }, body: body ? JSON.stringify(body) : undefined })); return { status: r.status, body: await r.json() }; };
+  const rate = (f) => Object.fromEntries(STAGE_FEATURE_IDS.map((id) => [id, f(id)]));
+  assert((await req2("POST", `/api/teams/${I}/diagnosis`, { rater: "GD", ratings: rate((id) => id.startsWith("s1") ? 3 : 2), evidence: { s1a: "SIT meets weekly" } })).status === 200, "diagnosis saved");
+  await req2("POST", `/api/teams/${I}/diagnosis`, { rater: "LL", ratings: rate((id) => id.startsWith("s1") ? 4 : 2) });
+  const d = await req2("GET", `/api/teams/${I}/diagnosis`);
+  console.log("stages", JSON.stringify(d.body.stages), "focus", d.body.focus);
+  assert(d.body.raters.length === 2 && d.body.focus === "s2", "diagnosis aggregates and finds focus stage");
+  const m = await req2("PUT", `/api/teams/${I}/meetings`, { version: 0, items: [{ date: "2026-11-10", title: "SIT meeting", agenda: "https://docs.google.com/x", minutes: "javascript:alert(1)" }] });
+  assert(m.body.version === 1 && m.body.items[0].minutes === "" && m.body.items[0].agenda.startsWith("https"), "meetings saved, unsafe link dropped");
+  console.log("EXTRA PASSED");
+}

@@ -7,6 +7,7 @@ import path from "node:path";
 import {
   ALL_ITEMS, TEAM_ITEM_IDS, TRUST_SECTIONS, SECTIONS, OPEN_QUESTIONS, LEADER_QUESTIONS, FREQ_QUESTIONS, FREQ_OPTIONS, bandFor, MIN_RESPONSES,
 } from "../../public/questions.js";
+import { STAGE_FEATURE_IDS, STAGES, stageBand } from "../../public/stages.js";
 
 // ---------- storage (Netlify Blobs, or local files for development) ----------
 function store() {
@@ -242,10 +243,66 @@ export default async (req) => {
         status: STATUS.has(it.status) ? it.status : "green",
         note: str(it.note, 400),
         linked: str(it.linked, 30),
+        meeting: str(it.meeting, 40),
       })).filter((it) => it.decision || it.action);
       const next = { version: current.version + 1, items, updated: new Date().toISOString() };
       await s.setJSON(`register/${id}`, next);
       return json(next);
+    }
+
+    // ---- Stage-of-improvement diagnosis (leadership raters) ----
+    if (parts[2] === "diagnosis") {
+      const roundN = Number(url.searchParams.get("round")) || team.round;
+      if (req.method === "POST") {
+        const body = await readBody(req);
+        const ratings = {};
+        for (const [k, v] of Object.entries(body.ratings || {})) {
+          const n = Number(v);
+          if (STAGE_FEATURE_IDS.includes(k) && Number.isInteger(n) && n >= 1 && n <= 4) ratings[k] = n;
+        }
+        if (Object.keys(ratings).length < STAGE_FEATURE_IDS.length) return err("Please rate every feature.");
+        const evidence = {};
+        for (const [k, v] of Object.entries(body.evidence || {})) if (STAGE_FEATURE_IDS.includes(k) && typeof v === "string" && v.trim()) evidence[k] = v.trim().slice(0, 500);
+        const rater = String(body.rater || "").trim().slice(0, 40) || "Anonymous";
+        await s.setJSON(`diag/${id}/${team.round}/${randomUUID()}`, { rater, ratings, evidence, at: new Date().toISOString().slice(0, 10) });
+        return json({ ok: true });
+      }
+      if (req.method === "GET") {
+        const { blobs } = await s.list({ prefix: `diag/${id}/${roundN}/` });
+        const raters = (await Promise.all(blobs.map((b) => s.get(b.key, { type: "json" })))).filter(Boolean);
+        const features = {};
+        for (const fid of STAGE_FEATURE_IDS) {
+          const vals = raters.map((r) => r.ratings[fid]).filter((v) => v != null);
+          features[fid] = { mean: round2(mean(vals)), min: vals.length ? Math.min(...vals) : null, max: vals.length ? Math.max(...vals) : null,
+            evidence: raters.filter((r) => r.evidence?.[fid]).map((r) => ({ rater: r.rater, text: r.evidence[fid] })) };
+        }
+        const stages = STAGES.map((st) => {
+          const total = raters.length ? round2(st.features.reduce((a, f) => a + (features[f.id].mean || 0), 0)) : null;
+          return { id: st.id, total, band: stageBand(total) };
+        });
+        const focus = stages.find((x) => x.total != null && x.total < 13) || (raters.length ? stages[stages.length - 1] : null);
+        return json({ round: roundN, raters: raters.map((r) => ({ rater: r.rater, at: r.at })), features, stages, focus: focus?.id || null });
+      }
+    }
+
+    // ---- Meetings (links to agendas and minutes kept in Google Docs etc.) ----
+    if (parts[2] === "meetings") {
+      const current = (await s.get(`meetings/${id}`, { type: "json" })) || { version: 0, items: [] };
+      if (req.method === "GET") return json(current);
+      if (req.method === "PUT") {
+        const body = await readBody(req);
+        if (Number(body.version) !== current.version)
+          return json({ error: "Someone else updated meetings. Reloading the latest version.", latest: current }, 409);
+        const str = (v, n) => (typeof v === "string" ? v.trim().slice(0, n) : "");
+        const okUrl = (u) => { const v = str(u, 600); return /^https:\/\//i.test(v) ? v : ""; };
+        const items = (Array.isArray(body.items) ? body.items : []).slice(0, 300).map((m) => ({
+          id: str(m.id, 40) || randomUUID(), date: str(m.date, 10), title: str(m.title, 120),
+          agenda: okUrl(m.agenda), minutes: okUrl(m.minutes), other: okUrl(m.other), note: str(m.note, 300),
+        })).filter((m) => m.title || m.date);
+        const next = { version: current.version + 1, items, updated: new Date().toISOString() };
+        await s.setJSON(`meetings/${id}`, next);
+        return json(next);
+      }
     }
 
     // POST /api/teams/:id/rounds -> start a new round (retake)

@@ -1,5 +1,6 @@
 import { SCALE, SECTIONS, OPEN_QUESTIONS, LEADER_QUESTIONS, FREQ_QUESTIONS, FREQ_OPTIONS, MIN_RESPONSES } from "./questions.js";
 import { CARDS, MOVES } from "./learn.js";
+import { STAGES, EVIDENT, STAGE_FEATURE_IDS, BAND_NAMES } from "./stages.js";
 import qrcode from "./vendor/qrcode.js";
 
 const app = document.getElementById("app");
@@ -106,7 +107,7 @@ function home() {
   <section class="section">
     <div class="wrap">
       <div class="grid g3 steps">
-        <div class="card"><div class="num">1</div><h3>You rate the team</h3><p class="muted">Answer 21 short statements about direction, how you work together and the four legs of trust. About 5 minutes.</p></div>
+        <div class="card"><div class="num">1</div><h3>You rate the team</h3><p class="muted">Answer 21 short statements about direction, how you work together and the four legs of trust, plus two on feedback. About 7 minutes.</p></div>
         <div class="card"><div class="num">2</div><h3>Your team rates it too</h3><p class="muted">Share a link or QR code. Responses are anonymous, and results only appear once ${MIN_RESPONSES} people have answered.</p></div>
         <div class="card"><div class="num">3</div><h3>See the gap, then act</h3><p class="muted">Compare your view with your team's, spot a possible "school of nice", and track your next moves in a built-in action register.</p></div>
       </div>
@@ -116,6 +117,21 @@ function home() {
     <div class="wrap">
       <div class="callout navy">
         <strong>Why this exists.</strong> At Bourchier Street we found our greatest strength, relational trust, was also our ceiling. We were a team that liked each other but rarely challenged each other. Team Pulse is the tool we built to see that clearly. We're sharing it in case it helps your team too.
+      </div>
+      <h2 style="margin-top:40px">What's inside</h2>
+      <div class="grid g3">
+        <div class="card"><div class="tag">Diagnose</div><h3>Team Pulse survey</h3><p class="muted small">Direction, ways of working, the four legs of trust and feedback culture, with your view against your team's.</p></div>
+        <div class="card"><div class="tag">Diagnose</div><h3>Stage of improvement</h3><p class="muted small">Your leaders rate 12 features across three stages to agree where the school really is, and what to focus on next.</p></div>
+        <div class="card"><div class="tag">Act</div><h3>Action register and meetings</h3><p class="muted small">Decisions, owners, timelines and traffic lights, linked to the meetings where they were made.</p></div>
+      </div>
+      <h2 style="margin-top:40px">Where it's going next</h2>
+      <div class="grid g3 roadmap">
+        <div class="card"><h3>Staff view of leadership</h3><p class="muted small">All staff rate how effective the leadership team is, compared with how the team sees itself.</p></div>
+        <div class="card"><h3>Every team, one view</h3><p class="muted small">Year-level and specialist teams run their own pulse, with a whole-school picture of trust across teams.</p></div>
+        <div class="card"><h3>Personal leadership plan</h3><p class="muted small">A self-assessment against five leadership behaviours, turned into a personal growth plan.</p></div>
+        <div class="card"><h3>Approach to improvement</h3><p class="muted small">How well does the school pursue change: few priorities, coherent story, staying the course?</p></div>
+        <div class="card"><h3>Retake reminders</h3><p class="muted small">A nudge at 6 and 12 months to re-run the pulse and see what's changed.</p></div>
+        <div class="card"><h3>Connected documents</h3><p class="muted small">Agendas and minutes created and filed automatically in Google Docs.</p></div>
       </div>
       ${teams.length ? `<h3 style="margin-top:34px">Your teams on this device</h3><div class="grid g3">${teams.map(([id, t]) => `<a class="card learn-card" href="#/d/${id}"><div class="tag">Dashboard</div><h3>${esc(t.name || id)}</h3><p class="muted small">Team code ${id}</p></a>`).join("")}</div>` : ""}
     </div>
@@ -286,20 +302,20 @@ async function dashboard(id) {
   const key = keyFor(id);
   if (!key) return render(`<div class="wrap narrow section"><h2>Private dashboard</h2><p>Open your full dashboard link (the one ending in a long key) on this device to see results.</p></div>`);
   render(`<div class="spinner">Loading your dashboard…</div>`);
-  let data, reg;
+  let data, reg, diag, meetings;
   try {
-    [data, reg] = await Promise.all([api("GET", `/teams/${id}/results`, null, key), api("GET", `/teams/${id}/register`, null, key)]);
+    [data, reg, diag, meetings] = await Promise.all([api("GET", `/teams/${id}/results`, null, key), api("GET", `/teams/${id}/register`, null, key), api("GET", `/teams/${id}/diagnosis`, null, key), api("GET", `/teams/${id}/meetings`, null, key)]);
   } catch (e) {
     return render(`<div class="wrap narrow section"><h2>Couldn't open the dashboard</h2><p>${esc(e.message)}</p></div>`);
   }
   rememberTeam(id, key, data.team.name);
-  const ctx = { id, key, data, reg, tab: store.sget(`tp_tab_${id}`, "overview") };
+  const ctx = { id, key, data, reg, diag, meetings, tab: store.sget(`tp_tab_${id}`, "overview") };
   drawDash(ctx);
 }
 
 function drawDash(ctx) {
   const { id, data } = ctx;
-  const tabs = [["overview", "Overview"], ["trust", "Trust"], ["statements", "Statements"], ["comments", "Comments"], ["register", "Action register"], ["invite", "Invite & settings"]];
+  const tabs = [["overview", "Overview"], ["trust", "Trust"], ["statements", "Statements"], ["comments", "Comments"], ["stage", "Stage diagnosis"], ["register", "Action register"], ["meetings", "Meetings"], ["invite", "Invite & settings"]];
   render(`<div class="wrap section">
     <div class="dash-head">
       <div><div class="eyebrow">Dashboard · Round ${data.round}</div><h1 style="margin:0">${esc(data.team.name)}</h1>
@@ -313,7 +329,7 @@ function drawDash(ctx) {
   document.getElementById("refresh").onclick = () => dashboard(id);
   document.getElementById("present").onclick = () => { document.body.classList.add("present"); toast("Press Esc to leave presentation view"); };
   const panel = document.getElementById("panel");
-  const tabFns = { overview: tabOverview, trust: tabTrust, statements: tabStatements, comments: tabComments, register: tabRegister, invite: tabInvite };
+  const tabFns = { overview: tabOverview, trust: tabTrust, statements: tabStatements, comments: tabComments, register: tabRegister, invite: tabInvite, stage: tabStage, meetings: tabMeetings };
   if (data.locked && ["overview", "trust", "statements", "comments"].includes(ctx.tab)) return lockedPanel(panel, ctx);
   tabFns[ctx.tab](panel, ctx);
 }
@@ -450,7 +466,7 @@ function tabRegister(panel, ctx) {
     <p class="muted small" style="margin:12px 0 0">Every decision gets one accountable person, a timeline and a traffic light. Review it at every meeting, and make it safe to report red. <a href="#/learn/register">Why this works</a></p></div>
   ${items.length ? `<div class="card" style="padding:8px 12px;overflow-x:auto"><table class="reg-table"><thead><tr><th></th><th>Decision &amp; action</th><th>Owner</th><th>Due</th><th class="hide-sm">Logged</th><th class="no-present"></th></tr></thead><tbody>
     ${sorted.map((it) => `<tr class="${it.status === "done" ? "done" : ""}"><td><span class="light ${it.status}" title="${it.status}"></span></td>
-      <td><strong>${esc(it.decision)}</strong>${it.action ? `<br><span class="muted">${esc(it.action)}</span>` : ""}${it.note ? `<br><span class="small">Progress: ${esc(it.note)}</span>` : ""}${it.linked ? `<br><span class="tag" style="margin:6px 0 0">${esc(SECTION_NAMES[it.linked] || it.linked)}</span>` : ""}</td>
+      <td><strong>${esc(it.decision)}</strong>${it.action ? `<br><span class="muted">${esc(it.action)}</span>` : ""}${it.note ? `<br><span class="small">Progress: ${esc(it.note)}</span>` : ""}${it.linked ? `<br><span class="tag" style="margin:6px 0 0">${esc(SECTION_NAMES[it.linked] || it.linked)}</span>` : ""}${meetingLabel(ctx, it.meeting)}</td>
       <td>${esc(it.owner)}</td><td>${it.due ? new Date(it.due).toLocaleDateString("en-AU", { day: "numeric", month: "short" }) : ""}</td><td class="hide-sm muted">${it.date ? new Date(it.date).toLocaleDateString("en-AU", { day: "numeric", month: "short" }) : ""}</td>
       <td class="no-present"><button class="linkbtn small" data-edit="${esc(it.id)}">Edit</button></td></tr>`).join("")}
   </tbody></table></div>` : `<div class="card lock"><h3>No decisions logged yet</h3><p class="muted">Start with one. What did your team decide at its last meeting, and who's accountable for it?</p></div>`}`;
@@ -470,6 +486,7 @@ function editRegisterItem(ctx, item) {
       <div><label>Due</label><input type="date" id="f-due" value="${esc(it.due || "")}"></div>
       <div class="full"><label>Status</label><div class="status-pick">${STATUS.map(([k, l]) => `<button type="button" data-st="${k}" class="${(it.status || "green") === k ? "on" : ""}"><span class="light ${k}"></span>${l}</button>`).join("")}</div></div>
       <div class="full"><label>Progress note</label><input type="text" id="f-note" maxlength="400" value="${esc(it.note || "")}" placeholder="Where is it up to?"></div>
+      <div class="full"><label>Decided at meeting (optional)</label><select id="f-meeting"><option value="">None</option>${[...(ctx.meetings?.items || [])].sort((a, b) => (b.date || "").localeCompare(a.date || "")).map((m) => `<option value="${esc(m.id)}" ${it.meeting === m.id ? "selected" : ""}>${esc((m.date ? new Date(m.date).toLocaleDateString("en-AU", { day: "numeric", month: "short" }) + " · " : "") + m.title)}</option>`).join("")}</select></div>
       <div class="full"><label>Linked area (optional)</label><select id="f-linked"><option value="">None</option>${SECTIONS.map((s) => `<option value="${s.id}" ${it.linked === s.id ? "selected" : ""}>${esc(s.title)}</option>`).join("")}</select></div>
     </div>
     <div class="survey-nav">${isNew ? `<button class="btn btn-ghost" id="f-cancel">Cancel</button>` : `<button class="btn btn-ghost" id="f-delete" style="color:var(--red)">Delete</button>`}<div style="display:flex;gap:10px">${isNew ? "" : `<button class="btn btn-ghost" id="f-cancel">Cancel</button>`}<button class="btn btn-navy" id="f-save">Save</button></div></div>
@@ -486,7 +503,7 @@ function editRegisterItem(ctx, item) {
   };
   bg.querySelector("#f-save").onclick = () => {
     const v = (id) => bg.querySelector(id).value.trim();
-    const updated = { ...it, id: it.id || (crypto.randomUUID ? crypto.randomUUID() : String(Date.now())), decision: v("#f-decision"), action: v("#f-action"), owner: v("#f-owner"), due: v("#f-due"), note: v("#f-note"), linked: v("#f-linked"), status, date: it.date || new Date().toISOString().slice(0, 10) };
+    const updated = { ...it, id: it.id || (crypto.randomUUID ? crypto.randomUUID() : String(Date.now())), decision: v("#f-decision"), action: v("#f-action"), owner: v("#f-owner"), due: v("#f-due"), note: v("#f-note"), linked: v("#f-linked"), meeting: v("#f-meeting"), status, date: it.date || new Date().toISOString().slice(0, 10) };
     if (!updated.decision && !updated.action) return (bg.querySelector("#f-msg").textContent = "Add a decision or an action.");
     const items = isNew ? [...ctx.reg.items, updated] : ctx.reg.items.map((x) => (x.id === it.id ? updated : x));
     persist(items);
@@ -509,4 +526,108 @@ function learnCard(cid) {
   render(`<div class="wrap narrow section article"><a href="#/learn" class="small">← All topics</a><div class="tag" style="margin-top:18px">${esc(c.tag)}</div><h1>${esc(c.title)}</h1><p class="lede">${esc(c.summary)}</p>
     ${c.body.map((p) => `<p>${md(p)}</p>`).join("")}<div class="source">${esc(c.source)}</div>
     <div class="btn-row"><a class="btn btn-ghost" href="#/learn/${nxt.id}">Next: ${esc(nxt.title)} →</a><a class="btn btn-gold" href="#/new">Run a Team Pulse</a></div></div>`);
+}
+
+
+// ---------- meetings ----------
+function meetingLabel(ctx, mid) {
+  const m = (ctx.meetings?.items || []).find((x) => x.id === mid);
+  return m ? `<br><span class="small muted">From: ${esc(m.title)}${m.date ? ", " + new Date(m.date).toLocaleDateString("en-AU", { day: "numeric", month: "short" }) : ""}</span>` : "";
+}
+
+function tabMeetings(panel, ctx) {
+  const items = [...(ctx.meetings.items || [])].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  const actionsFor = (mid) => (ctx.reg.items || []).filter((r) => r.meeting === mid);
+  panel.innerHTML = `<div class="card" style="margin-bottom:18px;display:flex;justify-content:space-between;gap:16px;align-items:center;flex-wrap:wrap">
+    <div><h3 style="margin:0">Meetings</h3><p class="muted small" style="margin:4px 0 0">Keep agendas and minutes in Google Docs (or OneDrive) with their own sharing settings, and link them here. Decisions flow into the action register.</p></div>
+    <button class="btn btn-gold no-present" id="addMeeting">+ Add meeting</button></div>
+  ${items.length ? items.map((m) => {
+    const acts = actionsFor(m.id);
+    return `<div class="card" style="margin-bottom:14px"><div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap"><div>
+      <div class="eyebrow" style="margin:0">${m.date ? new Date(m.date).toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "long", year: "numeric" }) : "No date"}</div>
+      <h3 style="margin:2px 0 8px">${esc(m.title)}</h3>
+      <div class="meeting-links">${m.agenda ? `<a href="${esc(m.agenda)}" target="_blank" rel="noopener">Agenda ↗</a>` : `<span class="muted small">No agenda link</span> `}${m.minutes ? `<a href="${esc(m.minutes)}" target="_blank" rel="noopener">Minutes ↗</a>` : `<span class="muted small" style="margin-left:8px">No minutes yet</span>`}${m.other ? `<a href="${esc(m.other)}" target="_blank" rel="noopener">Other ↗</a>` : ""}</div>
+      ${m.note ? `<p class="small" style="margin:8px 0 0">${esc(m.note)}</p>` : ""}</div>
+      <div class="no-present"><button class="linkbtn small" data-editm="${esc(m.id)}">Edit</button></div></div>
+      ${acts.length ? `<div style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px">${acts.map((a) => `<div class="small" style="margin:4px 0"><span class="light ${a.status}"></span> ${esc(a.decision || a.action)} <span class="muted">· ${esc(a.owner || "no owner")}</span></div>`).join("")}</div>` : ""}
+      <div class="no-present" style="margin-top:10px"><button class="linkbtn small" data-addact="${esc(m.id)}">+ Log a decision from this meeting</button></div></div>`;
+  }).join("") : `<div class="card lock"><h3>No meetings yet</h3><p class="muted">Add your next SIT meeting and paste the link to its agenda.</p></div>`}`;
+  document.getElementById("addMeeting").onclick = () => editMeeting(ctx, { date: new Date().toISOString().slice(0, 10) });
+  panel.querySelectorAll("[data-editm]").forEach((b) => b.onclick = () => editMeeting(ctx, items.find((m) => m.id === b.dataset.editm)));
+  panel.querySelectorAll("[data-addact]").forEach((b) => b.onclick = () => editRegisterItem(ctx, { date: new Date().toISOString().slice(0, 10), status: "green", meeting: b.dataset.addact }));
+}
+
+function editMeeting(ctx, m) {
+  const isNew = !m.id;
+  const bg = document.createElement("div"); bg.className = "modal-bg";
+  bg.innerHTML = `<div class="modal"><h2>${isNew ? "Add a meeting" : "Edit meeting"}</h2><div class="form-grid">
+    <div><label>Date</label><input type="date" id="m-date" value="${esc(m.date || "")}"></div>
+    <div><label>Title</label><input type="text" id="m-title" maxlength="120" value="${esc(m.title || "")}" placeholder="e.g. SIT meeting"></div>
+    <div class="full"><label>Agenda link</label><input type="text" id="m-agenda" value="${esc(m.agenda || "")}" placeholder="https://docs.google.com/…"></div>
+    <div class="full"><label>Minutes link</label><input type="text" id="m-minutes" value="${esc(m.minutes || "")}" placeholder="https://docs.google.com/…"></div>
+    <div class="full"><label>Other link (optional)</label><input type="text" id="m-other" value="${esc(m.other || "")}" placeholder="Slides, data, a reading…"></div>
+    <div class="full"><label>Note (optional)</label><input type="text" id="m-note" maxlength="300" value="${esc(m.note || "")}"></div></div>
+    <p class="muted small">Links must start with https://. Don't put sensitive staff or student details in titles or notes; keep those in the documents themselves.</p>
+    <div class="survey-nav">${isNew ? `<span></span>` : `<button class="btn btn-ghost" id="m-delete" style="color:var(--red)">Delete</button>`}<div style="display:flex;gap:10px"><button class="btn btn-ghost" id="m-cancel">Cancel</button><button class="btn btn-navy" id="m-save">Save</button></div></div><p id="m-msg" class="muted small"></p></div>`;
+  document.body.appendChild(bg);
+  const close = () => bg.remove();
+  bg.querySelector("#m-cancel").onclick = close; bg.onclick = (e) => { if (e.target === bg) close(); };
+  const persist = async (items) => {
+    try { ctx.meetings = await api("PUT", `/teams/${ctx.id}/meetings`, { version: ctx.meetings.version, items }, ctx.key); close(); ctx.tab = "meetings"; drawDash(ctx); toast("Saved"); }
+    catch (e) { if (e.status === 409 && e.data?.latest) ctx.meetings = e.data.latest; bg.querySelector("#m-msg").textContent = e.message; }
+  };
+  bg.querySelector("#m-save").onclick = () => {
+    const v = (id) => bg.querySelector(id).value.trim();
+    const links = ["#m-agenda", "#m-minutes", "#m-other"].map(v);
+    if (links.some((l) => l && !/^https:\/\//i.test(l))) return (bg.querySelector("#m-msg").textContent = "Links need to start with https://");
+    const upd = { ...m, id: m.id || (crypto.randomUUID ? crypto.randomUUID() : String(Date.now())), date: v("#m-date"), title: v("#m-title") || "Meeting", agenda: links[0], minutes: links[1], other: links[2], note: v("#m-note") };
+    persist(isNew ? [...ctx.meetings.items, upd] : ctx.meetings.items.map((x) => (x.id === m.id ? upd : x)));
+  };
+  const del = bg.querySelector("#m-delete");
+  if (del) del.onclick = () => { if (confirm("Delete this meeting? Linked decisions stay in the register.")) persist(ctx.meetings.items.filter((x) => x.id !== m.id)); };
+}
+
+// ---------- stage diagnosis ----------
+function tabStage(panel, ctx) {
+  const d = ctx.diag;
+  const has = d.raters.length > 0;
+  const stageInfo = (st) => d.stages.find((x) => x.id === st.id);
+  panel.innerHTML = `<div class="card" style="margin-bottom:18px;display:flex;justify-content:space-between;gap:16px;align-items:center;flex-wrap:wrap">
+    <div style="max-width:620px"><h3 style="margin:0">Where is our school on the improvement journey?</h3><p class="muted small" style="margin:6px 0 0">Your leadership team each rates how evident 12 features are across three stages of improvement. Strategies should match your stage: get the preconditions firmly in place before scaling up. Based on the stages in Macklin &amp; Zbar, <em>Driving School Improvement</em> (2020).</p></div>
+    <button class="btn btn-gold no-present" id="rateStage">${has ? "+ Add another rating" : "Start the diagnosis"}</button></div>
+  ${has ? `<p class="muted small">${d.raters.length} rating${d.raters.length === 1 ? "" : "s"} so far: ${d.raters.map((r) => esc(r.rater)).join(", ")}</p>
+  <div class="grid g3">${STAGES.map((st) => { const si = stageInfo(st); const isF = d.focus === st.id; return `
+    <div class="card stage-card b${si.band} ${isF ? "focus" : ""}"><div class="eyebrow" style="margin:0">Stage ${st.n}${isF ? " · your focus now" : ""}</div><h3 style="margin:4px 0 6px">${esc(st.title)}</h3>
+      <div class="stat">${fmt(si.total, 1)}<small> / 16</small></div><span class="pill b${si.band}" style="margin-top:8px">${BAND_NAMES[si.band]}</span>
+      <p class="small" style="margin:12px 0 0">${esc(st.bands[si.band])}</p></div>`; }).join("")}</div>
+  ${STAGES.map((st) => `<div class="card" style="margin-top:18px"><h3>Stage ${st.n}: ${esc(st.title)}</h3><div class="bars">${st.features.map((f) => { const r = d.features[f.id]; const pct = (v) => (v / 4) * 100;
+      return `<div class="bar-row"><div class="bar-label"><b>${esc(f.title)}</b><span>${fmt(r.mean, 1)} <span class="muted small">${r.min !== r.max ? `(range ${r.min} to ${r.max})` : "(all agree)"}</span></span></div>
+      <div class="track"><div class="fill" style="width:${pct(r.mean)}%"></div>${r.min !== r.max ? `<div class="spread" style="left:${pct(r.min)}%;width:${pct(r.max) - pct(r.min)}%"></div>` : ""}</div>
+      ${r.evidence.length ? `<div style="margin-top:6px">${r.evidence.map((e) => `<div class="small muted">• ${esc(e.text)} <em>(${esc(e.rater)})</em></div>`).join("")}</div>` : ""}</div>`; }).join("")}</div></div>`).join("")}
+  <div class="callout navy" style="margin-top:18px"><strong>Where you disagree is worth a conversation.</strong> A wide range on a feature means your leaders see the school differently. Talk about the evidence before deciding your next move.</div>`
+  : `<div class="card lock"><h3>No ratings yet</h3><p class="muted">Each member of your leadership team rates separately (about 10 minutes), then you compare. Disagreement is useful.</p></div>`}`;
+  document.getElementById("rateStage").onclick = () => rateStage(ctx);
+}
+
+function rateStage(ctx) {
+  const ratings = {}, evidence = {};
+  render(`<div class="wrap narrow section"><div class="eyebrow">Stage diagnosis</div><h1>Rate our school</h1>
+    <p class="lede">For each feature, how evident is it across the whole school right now? Think about what you'd actually see, not what's planned.</p>
+    <div class="card" style="margin:18px 0"><label for="rater">Your name or initials</label><input type="text" id="rater" maxlength="40" placeholder="e.g. GD"><p class="muted small" style="margin:6px 0 0">Shown to your leadership team next to your evidence notes.</p></div>
+    ${STAGES.map((st) => `<h2 style="margin-top:30px">Stage ${st.n}: ${esc(st.title)}</h2><p class="muted">${esc(st.blurb)}</p><div class="card">${st.features.map((f) => `
+      <div class="q"><p>${esc(f.title)}</p><ul class="signs">${f.signs.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>
+      <div class="scale">${EVIDENT.map((o) => `<button data-sf="${f.id}" data-v="${o.value}">${o.label}</button>`).join("")}</div>
+      <input type="text" data-ev="${f.id}" maxlength="500" placeholder="Evidence for your rating (optional)" style="margin-top:10px"></div>`).join("")}</div>`).join("")}
+    <div class="survey-nav"><button class="btn btn-ghost" id="cancel">Cancel</button><button class="btn btn-gold" id="save">Save my rating</button></div><p id="msg" class="muted small"></p></div>`);
+  app.querySelectorAll("[data-sf]").forEach((b) => b.onclick = () => { ratings[b.dataset.sf] = Number(b.dataset.v); app.querySelectorAll(`[data-sf="${b.dataset.sf}"]`).forEach((x) => x.classList.toggle("on", x === b)); });
+  app.querySelectorAll("[data-ev]").forEach((i) => i.oninput = () => { evidence[i.dataset.ev] = i.value; });
+  document.getElementById("cancel").onclick = () => drawDash(ctx);
+  document.getElementById("save").onclick = async () => {
+    const missing = STAGE_FEATURE_IDS.filter((id) => !ratings[id]);
+    if (missing.length) return (document.getElementById("msg").textContent = `Please rate all 12 features (${missing.length} to go).`);
+    try {
+      await api("POST", `/teams/${ctx.id}/diagnosis`, { rater: document.getElementById("rater").value, ratings, evidence }, ctx.key);
+      ctx.diag = await api("GET", `/teams/${ctx.id}/diagnosis`, null, ctx.key); ctx.tab = "stage"; store.sset(`tp_tab_${ctx.id}`, "stage"); drawDash(ctx); toast("Rating saved");
+    } catch (e) { document.getElementById("msg").textContent = e.message; }
+  };
 }
