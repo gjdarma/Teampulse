@@ -1,0 +1,1 @@
+{ "name": "Team Pulse", "short_name": "Team Pulse", "start_url": "/", "display": "standalone", "background_color": "#f7f6f2", "theme_color": "#13254a", "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml" }] }

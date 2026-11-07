@@ -1,0 +1,14 @@
+{
+  "name": "teampulse",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Team Pulse: a team diagnostic and learning tool for school leadership teams",
+  "scripts": {
+    "dev": "node scripts/devserver.mjs",
+    "test": "node scripts/smoke.mjs"
+  },
+  "dependencies": {
+    "@netlify/blobs": "^8.1.0"
+  }
+}
