@@ -2,6 +2,7 @@ import { SCALE, SECTIONS, OPEN_QUESTIONS, LEADER_QUESTIONS, FREQ_QUESTIONS, FREQ
 import { CARDS, MOVES } from "./learn.js";
 import { STAGES, EVIDENT, STAGE_FEATURE_IDS, BAND_NAMES } from "./stages.js";
 import qrcode from "./vendor/qrcode.js";
+import { readPlannerFile } from "./planner-import.js";
 
 const app = document.getElementById("app");
 
@@ -377,10 +378,12 @@ function tabOverview(panel, ctx) {
     <div class="card"><h3>By area</h3>${legend(data.previous)}<div class="bars" style="margin-top:14px">${SECTIONS.map((s) => bar(s.title, data.sections[s.id].mean, data.sections[s.id].self, prevSec[s.id]?.mean)).join("")}</div></div>
     <div class="card"><h3>Biggest gaps: you vs team</h3>${data.gaps.length ? `<ul class="gap-list">${data.gaps.slice(0, 6).map((g) => `<li><span class="gap-chip ${g.gap < 0 ? "neg" : ""}">${g.gap > 0 ? "+" : ""}${fmt(g.gap, 1)}</span><span>${esc(g.text)}<br><span class="muted small">You ${g.self} · Team ${fmt(g.team, 1)}</span></span></li>`).join("")}</ul><p class="muted small">Positive means you rated it higher than your team did.</p>` : `<p class="muted">Do your self-rating to see where your view differs from your team's.</p>`}</div>
   </div>
+  <div class="callout" style="margin-top:28px;display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap"><div><strong>Ready to act?</strong> Look at this evidence with your team and agree up to three small actions. They go straight into your action register.</div><button class="btn btn-navy no-present" id="planActions">Agree our small actions</button></div>
   <h2 style="margin-top:36px">What to try next</h2>
   <p class="muted">Small moves for your two lowest-scoring areas. Add any of them to your action register.</p>
   ${lowest.map(({ s, m }) => `<h3 style="margin-top:22px">${esc(s.title)} <span class="muted small">(${fmt(m, 2)})</span></h3><div class="grid g2">${(MOVES[s.id] || []).map((mv) => moveCard(mv, s.id)).join("")}</div>`).join("")}`;
   wireMoves(panel, ctx);
+  const pa = document.getElementById("planActions"); if (pa) pa.onclick = () => planActions(ctx);
 }
 
 function feedbackCulture(data) {
@@ -461,22 +464,164 @@ const SECTION_NAMES = Object.fromEntries(SECTIONS.map((s) => [s.id, s.title]));
 
 function tabRegister(panel, ctx) {
   const items = ctx.reg.items || [];
+  const f = (ctx.regFilter = ctx.regFilter || { show: "open", owner: "" });
   const count = (st) => items.filter((i) => i.status === st).length;
+  const today = new Date().toISOString().slice(0, 10);
+  const overdue = (i) => i.status !== "done" && i.due && i.due < today;
   const order = { red: 0, amber: 1, green: 2, done: 3 };
-  const sorted = [...items].sort((a, b) => order[a.status] - order[b.status] || (a.due || "9").localeCompare(b.due || "9"));
+  const owners = [...new Set(items.map((i) => i.owner).filter(Boolean))].sort();
+  let shown = items.filter((i) => f.show === "all" || (f.show === "open" ? i.status !== "done" : f.show === "done" ? i.status === "done" : (i.status === "red" || i.status === "amber" || overdue(i))));
+  if (f.owner) shown = shown.filter((i) => i.owner === f.owner);
+  shown.sort((a, b) => order[a.status] - order[b.status] || (a.due || "9").localeCompare(b.due || "9"));
+  const fmtD = (d) => (d ? new Date(d).toLocaleDateString("en-AU", { day: "numeric", month: "short" }) : "");
   panel.innerHTML = `
-  <div class="card" style="margin-bottom:18px"><div style="display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap">
-    <div class="reg-summary"><div><b>${count("red")}</b><span class="light red"></span> Off track</div><div><b>${count("amber")}</b><span class="light amber"></span> At risk</div><div><b>${count("green")}</b><span class="light green"></span> On track</div><div><b>${count("done")}</b><span class="light done"></span> Done</div></div>
-    <div class="no-present"><button class="btn btn-gold" id="addItem">+ Add decision</button></div></div>
+  <div class="card" style="margin-bottom:14px"><div style="display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap">
+    <div class="reg-summary"><div><b>${count("red")}</b><span class="light red"></span> Off track</div><div><b>${count("amber")}</b><span class="light amber"></span> At risk</div><div><b>${count("green")}</b><span class="light green"></span> On track</div><div><b>${count("done")}</b><span class="light done"></span> Done</div><div><b>${items.filter(overdue).length}</b> Overdue</div></div>
+    <div class="no-present btn-row" style="margin:0"><button class="btn btn-ghost" id="importPlanner">Import from Planner</button><button class="btn btn-ghost" id="reviewMode">Review mode</button><button class="btn btn-gold" id="addItem">+ Add decision</button></div></div>
     <p class="muted small" style="margin:12px 0 0">Every decision gets one accountable person, a timeline and a traffic light. Review it at every meeting, and make it safe to report red. <a href="#/learn/register">Why this works</a></p></div>
-  ${items.length ? `<div class="card" style="padding:8px 12px;overflow-x:auto"><table class="reg-table"><thead><tr><th></th><th>Decision &amp; action</th><th>Owner</th><th>Due</th><th class="hide-sm">Logged</th><th class="no-present"></th></tr></thead><tbody>
-    ${sorted.map((it) => `<tr class="${it.status === "done" ? "done" : ""}"><td><span class="light ${it.status}" title="${it.status}"></span></td>
-      <td><strong>${esc(it.decision)}</strong>${it.action ? `<br><span class="muted">${esc(it.action)}</span>` : ""}${it.note ? `<br><span class="small">Progress: ${esc(it.note)}</span>` : ""}${it.linked ? `<br><span class="tag" style="margin:6px 0 0">${esc(SECTION_NAMES[it.linked] || it.linked)}</span>` : ""}${meetingLabel(ctx, it.meeting)}</td>
-      <td>${esc(it.owner)}</td><td>${it.due ? new Date(it.due).toLocaleDateString("en-AU", { day: "numeric", month: "short" }) : ""}</td><td class="hide-sm muted">${it.date ? new Date(it.date).toLocaleDateString("en-AU", { day: "numeric", month: "short" }) : ""}</td>
+  <div class="no-present" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px">
+    <div class="status-pick">${[["open", "Open"], ["attention", "Needs attention"], ["done", "Done"], ["all", "All"]].map(([k, l]) => `<button data-show="${k}" class="${f.show === k ? "on" : ""}">${l}</button>`).join("")}</div>
+    <select id="ownerFilter" style="width:auto;padding:7px 10px"><option value="">Everyone</option>${owners.map((o) => `<option ${f.owner === o ? "selected" : ""}>${esc(o)}</option>`).join("")}</select>
+    <span class="muted small">${shown.length} shown</span></div>
+  ${shown.length ? `<div class="card" style="padding:8px 12px;overflow-x:auto"><table class="reg-table"><thead><tr><th></th><th>Decision &amp; action</th><th>Owner</th><th>Due</th><th class="hide-sm">Logged</th><th class="no-present"></th></tr></thead><tbody>
+    ${shown.map((it) => `<tr class="${it.status === "done" ? "done" : ""}"><td><span class="light ${it.status}" title="${it.status}"></span></td>
+      <td><strong>${esc(it.decision)}</strong>${it.action ? `<br><span class="muted">${esc(it.action)}</span>` : ""}${it.note ? `<br><span class="small">${esc(it.note)}</span>` : ""}${it.linked ? `<br><span class="tag" style="margin:6px 0 0">${esc(SECTION_NAMES[it.linked] || it.linked)}</span>` : ""}${meetingLabel(ctx, it.meeting)}</td>
+      <td>${esc(it.owner)}</td><td style="${overdue(it) ? "color:var(--red);font-weight:700" : ""}">${fmtD(it.due)}</td><td class="hide-sm muted">${fmtD(it.date)}</td>
       <td class="no-present"><button class="linkbtn small" data-edit="${esc(it.id)}">Edit</button></td></tr>`).join("")}
-  </tbody></table></div>` : `<div class="card lock"><h3>No decisions logged yet</h3><p class="muted">Start with one. What did your team decide at its last meeting, and who's accountable for it?</p></div>`}`;
-  document.getElementById("addItem").onclick = () => editRegisterItem(ctx, { date: new Date().toISOString().slice(0, 10), status: "green" });
+  </tbody></table></div>` : `<div class="card lock"><h3>${items.length ? "Nothing matches this filter" : "No decisions logged yet"}</h3><p class="muted">${items.length ? "Try another filter." : "Import your Planner tasks, agree small actions from your results, or add one now."}</p></div>`}`;
+  document.getElementById("addItem").onclick = () => editRegisterItem(ctx, { date: today, status: "green" });
+  document.getElementById("importPlanner").onclick = () => importPlanner(ctx);
+  document.getElementById("reviewMode").onclick = () => reviewMode(ctx);
+  panel.querySelectorAll("[data-show]").forEach((b) => b.onclick = () => { f.show = b.dataset.show; tabRegister(panel, ctx); });
+  document.getElementById("ownerFilter").onchange = (e) => { f.owner = e.target.value; tabRegister(panel, ctx); };
   panel.querySelectorAll("[data-edit]").forEach((b) => b.onclick = () => editRegisterItem(ctx, items.find((i) => i.id === b.dataset.edit)));
+}
+
+async function saveRegister(ctx, items) {
+  ctx.reg = await api("PUT", `/teams/${ctx.id}/register`, { version: ctx.reg.version, items }, ctx.key);
+}
+
+function importPlanner(ctx) {
+  const bg = document.createElement("div"); bg.className = "modal-bg";
+  bg.innerHTML = `<div class="modal"><h2>Import from Planner</h2>
+    <ol class="small muted" style="padding-left:18px"><li>In Microsoft Planner, open your plan.</li><li>Click the <strong>…</strong> next to the plan name, then <strong>Export plan to Excel</strong>.</li><li>Choose that file here.</li></ol>
+    <input type="file" id="pfile" accept=".xlsx,.csv">
+    <div id="ppreview" style="margin-top:14px"></div>
+    <div class="survey-nav"><button class="btn btn-ghost" id="pcancel">Cancel</button><button class="btn btn-navy" id="pgo" disabled>Import</button></div><p id="pmsg" class="muted small"></p></div>`;
+  document.body.appendChild(bg);
+  let tasks = [];
+  const close = () => bg.remove();
+  bg.querySelector("#pcancel").onclick = close;
+  const draw = () => {
+    const incDone = bg.querySelector("#pdone")?.checked ?? false;
+    const use = tasks.filter((t) => incDone || t.status !== "done");
+    const existing = new Set((ctx.reg.items || []).map((i) => i.id));
+    const updates = use.filter((t) => t.id && existing.has(t.id)).length;
+    bg.querySelector("#ppreview").innerHTML = `<div class="callout navy small"><strong>${tasks.length} tasks found.</strong> ${tasks.filter((t) => t.status === "done").length} completed, ${tasks.filter((t) => t.status === "red").length} late.</div>
+      <label style="display:flex;gap:8px;align-items:center;font-weight:500;margin:12px 0"><input type="checkbox" id="pdone" ${incDone ? "checked" : ""}> Include completed tasks</label>
+      <p class="small">${use.length} will be imported${updates ? ` (${updates} already in the register will be updated, not duplicated)` : ""}.</p>
+      <div style="max-height:220px;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:6px 10px">${use.slice(0, 50).map((t) => `<div class="small" style="padding:4px 0;border-bottom:1px solid var(--line)"><span class="light ${t.status}"></span> ${esc(t.decision)} <span class="muted">· ${esc(t.owner || "no owner")}${t.due ? " · due " + esc(t.due) : ""}</span></div>`).join("")}</div>`;
+    bg.querySelector("#pdone").onchange = draw;
+    bg.querySelector("#pgo").disabled = !use.length;
+    bg.querySelector("#pgo").onclick = async () => {
+      const byId = new Map((ctx.reg.items || []).map((i) => [i.id, i]));
+      for (const t of use) { const id = t.id || (crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random())); const prev = byId.get(id); byId.set(id, prev ? { ...prev, ...t, id, linked: prev.linked, meeting: prev.meeting } : { ...t, id }); }
+      const all = [...byId.values()];
+      if (all.length > 200) return (bg.querySelector("#pmsg").textContent = `That would make ${all.length} items; the register holds 200. Leave completed tasks out.`);
+      try { await saveRegister(ctx, all); close(); ctx.tab = "register"; drawDash(ctx); toast(`Imported ${use.length} tasks`); }
+      catch (e) { bg.querySelector("#pmsg").textContent = e.message; }
+    };
+  };
+  bg.querySelector("#pfile").onchange = async (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    bg.querySelector("#pmsg").textContent = "Reading…";
+    try { tasks = await readPlannerFile(file); bg.querySelector("#pmsg").textContent = ""; draw(); }
+    catch (err) { bg.querySelector("#pmsg").textContent = err.message; }
+  };
+}
+
+function reviewMode(ctx) {
+  const today = new Date().toISOString().slice(0, 10);
+  const queue = (ctx.reg.items || []).filter((i) => i.status === "red" || i.status === "amber" || (i.status !== "done" && i.due && i.due < today))
+    .sort((a, b) => ({ red: 0, amber: 1, green: 2 }[a.status] - { red: 0, amber: 1, green: 2 }[b.status]));
+  let i = 0;
+  const draw = () => {
+    if (i >= queue.length) {
+      render(`<div class="wrap narrow section lock"><div class="big">✓</div><h1>Review done</h1><p class="lede">${queue.length ? `You reviewed ${queue.length} item${queue.length === 1 ? "" : "s"}.` : "Nothing is off track, at risk or overdue. Nice work."}</p><div class="btn-row" style="justify-content:center"><button class="btn btn-navy" id="back">Back to the register</button></div></div>`);
+      document.getElementById("back").onclick = () => { ctx.tab = "register"; drawDash(ctx); };
+      return;
+    }
+    const it = queue[i];
+    render(`<div class="wrap narrow section"><div class="eyebrow">Review mode · ${i + 1} of ${queue.length}</div>
+      <div class="card"><div style="display:flex;gap:10px;align-items:center"><span class="light ${it.status}"></span><span class="muted small">${esc(it.owner || "No owner")}${it.due ? " · due " + new Date(it.due).toLocaleDateString("en-AU", { day: "numeric", month: "short" }) : ""}</span></div>
+      <h2 style="margin-top:10px">${esc(it.decision)}</h2>${it.action ? `<p>${esc(it.action)}</p>` : ""}
+      <label style="margin-top:16px">Where is it up to?</label><input type="text" id="rnote" maxlength="400" value="${esc(it.note || "")}">
+      <label style="margin-top:16px">Status now</label><div class="status-pick">${STATUS.map(([k, l]) => `<button data-st="${k}" class="${it.status === k ? "on" : ""}"><span class="light ${k}"></span>${l}</button>`).join("")}</div>
+      <label style="margin-top:16px">New due date (optional)</label><input type="date" id="rdue" value="${esc(it.due || "")}" style="max-width:220px"></div>
+      <div class="survey-nav"><button class="btn btn-ghost" id="rexit">Exit</button><button class="btn btn-navy" id="rnext">Save &amp; next</button></div><p id="rmsg" class="muted small"></p></div>`);
+    let st = it.status;
+    app.querySelectorAll("[data-st]").forEach((b) => b.onclick = () => { st = b.dataset.st; app.querySelectorAll("[data-st]").forEach((x) => x.classList.toggle("on", x === b)); });
+    document.getElementById("rexit").onclick = () => { ctx.tab = "register"; drawDash(ctx); };
+    document.getElementById("rnext").onclick = async () => {
+      const upd = { ...it, status: st, note: document.getElementById("rnote").value.trim(), due: document.getElementById("rdue").value };
+      try { await saveRegister(ctx, ctx.reg.items.map((x) => (x.id === it.id ? upd : x))); i++; draw(); }
+      catch (e) { if (e.status === 409 && e.data?.latest) ctx.reg = e.data.latest; document.getElementById("rmsg").textContent = e.message; }
+    };
+  };
+  draw();
+}
+
+// ---------- agree small actions from the results ----------
+function planActions(ctx) {
+  const { data } = ctx;
+  const secs = SECTIONS.map((s) => ({ s, m: data.sections[s.id].mean })).filter((x) => x.m != null).sort((a, b) => a.m - b.m);
+  const lowest = secs.slice(0, 2).map((x) => x.s);
+  const weakLeg = [...data.legs].filter((l) => l.mean != null).sort((a, b) => a.mean - b.mean)[0];
+  const focusIds = [...new Set([...lowest.map((s) => s.id), weakLeg?.id].filter(Boolean))];
+  const options = focusIds.flatMap((sid) => (MOVES[sid] || []).map((mv) => ({ ...mv, sid })));
+  const picked = [];
+  const doDiff = data.comments?.o4 || [];
+  const draw = () => {
+    render(`<div class="wrap section" style="max-width:1000px"><div class="eyebrow">From data to action</div><h1>Agree your small actions</h1>
+      <p class="lede">Look at the evidence together, then pick up to three small, specific actions. Each one gets one owner and a date, and goes straight into your action register.</p>
+      <div class="grid g2" style="margin-top:20px">
+        <div class="card"><h3>What the data says</h3>
+          <p class="small"><strong>Lowest areas:</strong> ${secs.slice(0, 3).map((x) => `${esc(x.s.title)} (${fmt(x.m, 2)})`).join(", ")}</p>
+          ${data.nice?.flag ? `<p class="small"><strong>Possible school of nice:</strong> respect and regard ${fmt(data.nice.warm, 2)}, competence ${fmt(data.nice.competence, 2)}.</p>` : ""}
+          ${data.gaps.length ? `<p class="small"><strong>Biggest gaps between your view and the team's:</strong></p><ul class="small" style="padding-left:18px;margin-top:0">${data.gaps.slice(0, 3).map((g) => `<li>${esc(g.text)} (you ${g.self}, team ${fmt(g.team, 1)})</li>`).join("")}</ul>` : ""}
+          ${data.freq?.f1?.n ? `<p class="small"><strong>Feedback:</strong> ${data.freq.f1.dist[2] + data.freq.f1.dist[3] + data.freq.f1.dist[4]} of ${data.freq.f1.n} last received meaningful feedback more than a term ago, or can't remember.</p>` : ""}
+          ${doDiff.length ? `<p class="small"><strong>What your team asked you to do differently:</strong></p>${doDiff.slice(0, 4).map((c) => `<div class="comment small">${esc(c)}</div>`).join("")}` : ""}
+        </div>
+        <div class="card"><h3>Pick up to three</h3><p class="muted small">Suggested moves for your lowest areas, or write your own.</p>
+          <div class="grid" style="gap:10px">${options.map((o, k) => `<label class="move" style="display:flex;gap:10px;cursor:pointer;${picked.some((p) => p.key === "o" + k) ? "border-color:var(--navy);background:var(--navy-soft)" : ""}"><input type="checkbox" data-opt="${k}" ${picked.some((p) => p.key === "o" + k) ? "checked" : ""}><span><strong>${esc(o.title)}</strong> <span class="tag" style="margin:0 0 0 6px">${esc(SECTION_NAMES[o.sid])}</span><br><span class="small muted">${esc(o.text)}</span></span></label>`).join("")}</div>
+          <div style="display:flex;gap:8px;margin-top:12px"><input type="text" id="own" maxlength="200" placeholder="Or write your own small action"><button class="btn btn-ghost" id="addOwn">Add</button></div></div>
+      </div>
+      ${picked.length ? `<h2 style="margin-top:28px">Your actions (${picked.length} of 3)</h2>${picked.map((p, k) => `<div class="card" style="margin-bottom:12px"><div class="form-grid">
+          <div class="full"><strong>${esc(p.title)}</strong><div class="small muted">${esc(p.text || "")}</div></div>
+          <div><label>Owner (one person)</label><input type="text" data-owner="${k}" maxlength="80" value="${esc(p.owner || "")}"></div>
+          <div><label>Due</label><input type="date" data-due="${k}" value="${esc(p.due || "")}"></div></div>
+          <button class="linkbtn small" data-rm="${k}" style="margin-top:8px">Remove</button></div>`).join("")}` : ""}
+      <div class="survey-nav"><button class="btn btn-ghost" id="pa-cancel">Cancel</button><button class="btn btn-gold" id="pa-save" ${picked.length ? "" : "disabled"}>Add ${picked.length || ""} to action register</button></div><p id="pa-msg" class="muted small"></p></div>`);
+    app.querySelectorAll("[data-opt]").forEach((cb) => cb.onchange = () => {
+      const k = "o" + cb.dataset.opt, o = options[cb.dataset.opt];
+      const at = picked.findIndex((p) => p.key === k);
+      if (at >= 0) picked.splice(at, 1); else if (picked.length < 3) picked.push({ key: k, title: o.title, text: o.text, sid: o.sid }); else toast("Three is plenty. Small and done beats big and stalled.");
+      draw();
+    });
+    app.querySelectorAll("[data-owner]").forEach((inp) => inp.oninput = () => { picked[inp.dataset.owner].owner = inp.value; });
+    app.querySelectorAll("[data-due]").forEach((inp) => inp.onchange = () => { picked[inp.dataset.due].due = inp.value; });
+    app.querySelectorAll("[data-rm]").forEach((b) => b.onclick = () => { picked.splice(b.dataset.rm, 1); draw(); });
+    document.getElementById("addOwn").onclick = () => { const v = document.getElementById("own").value.trim(); if (!v) return; if (picked.length >= 3) return toast("Three is plenty."); picked.push({ key: "c" + Date.now(), title: v, text: "", sid: "" }); draw(); };
+    document.getElementById("pa-cancel").onclick = () => drawDash(ctx);
+    document.getElementById("pa-save").onclick = async () => {
+      if (picked.some((p) => !p.owner)) return (document.getElementById("pa-msg").textContent = "Give each action one owner.");
+      const today = new Date().toISOString().slice(0, 10);
+      const add = picked.map((p) => ({ id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()), date: today, decision: p.title, action: p.text, owner: p.owner, due: p.due || "", status: "green", note: "Agreed from Team Pulse results", linked: p.sid, meeting: "" }));
+      try { await saveRegister(ctx, [...(ctx.reg.items || []), ...add]); ctx.tab = "register"; ctx.regFilter = { show: "open", owner: "" }; drawDash(ctx); toast(`${add.length} action${add.length === 1 ? "" : "s"} added`); }
+      catch (e) { document.getElementById("pa-msg").textContent = e.message; }
+    };
+  };
+  draw();
 }
 
 function editRegisterItem(ctx, item) {
