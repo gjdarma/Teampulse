@@ -38,29 +38,47 @@ async function unzip(buf) {
 
 const colIndex = (ref) => { const letters = ref.replace(/\d+/g, ""); let n = 0; for (const ch of letters) n = n * 26 + (ch.charCodeAt(0) - 64); return n - 1; };
 
-async function xlsxRows(buf) {
+async function xlsxSheets(buf) {
   const zip = await unzip(buf);
   const parse = (t) => new DOMParser().parseFromString(t, "application/xml");
   const shared = [];
   const ss = await zip.text("xl/sharedStrings.xml");
   if (ss) parse(ss).querySelectorAll("si").forEach((si) => shared.push([...si.querySelectorAll("t")].map((t) => t.textContent).join("")));
-  const sheetName = zip.names.find((n) => /^xl\/worksheets\/sheet1\.xml$/.test(n)) || zip.names.find((n) => /^xl\/worksheets\/sheet\d+\.xml$/.test(n));
-  if (!sheetName) throw new Error("Couldn't find a worksheet in that file.");
-  const doc = parse(await zip.text(sheetName));
-  const rows = [];
-  doc.querySelectorAll("sheetData row").forEach((r) => {
-    const row = [];
-    r.querySelectorAll("c").forEach((c) => {
-      const t = c.getAttribute("t"); const v = c.querySelector("v")?.textContent ?? "";
-      let val = v;
-      if (t === "s") val = shared[Number(v)] ?? "";
-      else if (t === "inlineStr") val = [...c.querySelectorAll("is t")].map((x) => x.textContent).join("");
-      else if (t === "b") val = v === "1" ? "TRUE" : "FALSE";
-      row[colIndex(c.getAttribute("r") || "A1")] = val;
+  // Sheet order and names from workbook.xml + its relationships; fall back to file order.
+  let order = [];
+  try {
+    const wb = parse(await zip.text("xl/workbook.xml"));
+    const rels = parse(await zip.text("xl/_rels/workbook.xml.rels"));
+    const target = {};
+    rels.querySelectorAll("Relationship").forEach((r) => { target[r.getAttribute("Id")] = r.getAttribute("Target"); });
+    wb.querySelectorAll("sheet").forEach((sh) => {
+      const rid = sh.getAttribute("r:id") || sh.getAttributeNS("http://schemas.openxmlformats.org/officeDocument/2006/relationships", "id");
+      let t = target[rid]; if (!t) return;
+      t = t.replace(/^\/?xl\//, "").replace(/^\//, "");
+      order.push({ name: sh.getAttribute("name") || "", path: "xl/" + t });
     });
-    rows.push(row.map((x) => x ?? ""));
-  });
-  return rows;
+  } catch {}
+  if (!order.length) order = zip.names.filter((n) => /^xl\/worksheets\/sheet\d+\.xml$/.test(n)).sort().map((path) => ({ name: path, path }));
+  const sheets = [];
+  for (const { name, path } of order) {
+    const xml = await zip.text(path); if (!xml) continue;
+    const rows = [];
+    parse(xml).querySelectorAll("sheetData row").forEach((r) => {
+      const row = [];
+      r.querySelectorAll("c").forEach((c) => {
+        const t = c.getAttribute("t"); const v = c.querySelector("v")?.textContent ?? "";
+        let val = v;
+        if (t === "s") val = shared[Number(v)] ?? "";
+        else if (t === "inlineStr") val = [...c.querySelectorAll("is t")].map((x) => x.textContent).join("");
+        else if (t === "b") val = v === "1" ? "TRUE" : "FALSE";
+        row[colIndex(c.getAttribute("r") || "A1")] = val;
+      });
+      rows.push(Array.from(row, (x) => x ?? ""));
+    });
+    sheets.push({ name, rows });
+  }
+  if (!sheets.length) throw new Error("Couldn't find any worksheets in that file.");
+  return sheets;
 }
 
 function csvRows(text) {
@@ -88,43 +106,71 @@ function toISO(v) {
   const d = new Date(s); return isNaN(d) ? "" : d.toISOString().slice(0, 10);
 }
 
+// Column names vary between Planner versions and languages of export; accept common variants.
+const ALIASES = {
+  name: ["task name", "task title", "title", "task", "name"],
+  progress: ["progress", "status", "% complete", "percent complete"],
+  due: ["due date", "due", "finish date", "finish", "end date"],
+  assigned: ["assigned to", "assignees", "assignee", "assigned", "owner"],
+  bucket: ["bucket name", "bucket"],
+  created: ["created date", "created", "created on"],
+  description: ["description", "notes", "details"],
+  id: ["task id", "id"],
+  late: ["late", "overdue"],
+  checklist: ["completed checklist items", "checklist"],
+  priority: ["priority"],
+};
+const norm = (h) => String(h ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+
+function findHeader(rows) {
+  // A header row has a task-name column plus at least one other Planner-style column.
+  for (let i = 0; i < Math.min(rows.length, 40); i++) {
+    const head = rows[i].map(norm);
+    const has = (key) => ALIASES[key].some((a) => head.includes(a));
+    if (has("name") && (has("due") || has("assigned") || has("progress") || has("bucket"))) return i;
+  }
+  return -1;
+}
+
 export async function readPlannerFile(file) {
   const buf = await file.arrayBuffer();
-  const rows = /\.csv$/i.test(file.name) ? csvRows(new TextDecoder().decode(buf)) : await xlsxRows(buf);
-  const hi = rows.findIndex((r) => r.some((c) => /^task name$/i.test(String(c).trim())));
-  if (hi < 0) throw new Error("Couldn't find a 'Task Name' column. Use Planner's 'Export plan to Excel'.");
-  const head = rows[hi].map((h) => String(h).trim().toLowerCase());
-  const col = (name) => head.indexOf(name);
-  const get = (r, name) => { const i = col(name); return i >= 0 ? String(r[i] ?? "").trim() : ""; };
+  const sheets = /\.csv$/i.test(file.name) ? [{ name: file.name, rows: csvRows(new TextDecoder().decode(buf)) }] : await xlsxSheets(buf);
+  let rows = null, hi = -1, sheetName = "";
+  for (const sh of sheets) { const h = findHeader(sh.rows); if (h >= 0) { rows = sh.rows; hi = h; sheetName = sh.name; break; } }
+  if (!rows) throw new Error(`Couldn't find the task list. Looked in ${sheets.length} tab${sheets.length === 1 ? "" : "s"} (${sheets.map((s) => s.name).join(", ")}) for a column like "Task Name" with due dates or assignees.`);
+  const head = rows[hi].map(norm);
+  const col = (key) => { for (const a of ALIASES[key]) { const i = head.indexOf(a); if (i >= 0) return i; } return -1; };
+  const get = (r, key) => { const i = col(key); return i >= 0 ? String(r[i] ?? "").trim() : ""; };
   const today = new Date().toISOString().slice(0, 10);
   const tasks = [];
   for (const r of rows.slice(hi + 1)) {
-    const name = get(r, "task name"); if (!name) continue;
+    const name = get(r, "name"); if (!name) continue;
     const progress = get(r, "progress").toLowerCase();
-    const due = toISO(get(r, "due date"));
+    const due = toISO(get(r, "due"));
     const lateCell = get(r, "late").toLowerCase();
-    const done = progress.startsWith("complete");
+    const done = progress.startsWith("complete") || progress === "done" || progress === "100" || progress === "100%" || progress === "1";
     const late = !done && (lateCell === "true" || lateCell === "yes" || (due && due < today));
-    const assigned = get(r, "assigned to").split(/[;,]/).map((x) => x.trim()).filter(Boolean);
-    const bucket = get(r, "bucket name");
-    const checklist = get(r, "completed checklist items");
+    const assigned = get(r, "assigned").split(/[;,]/).map((x) => x.trim()).filter(Boolean);
+    const bucket = get(r, "bucket");
+    const checklist = get(r, "checklist");
     const noteBits = [];
     if (assigned.length > 1) noteBits.push(`Also: ${assigned.slice(1).join(", ")}`);
     if (checklist) noteBits.push(`Checklist ${checklist}`);
     if (bucket) noteBits.push(`Planner bucket: ${bucket}`);
-    const taskId = get(r, "task id");
+    const taskId = get(r, "id");
     tasks.push({
       id: taskId ? `planner-${taskId}`.slice(0, 40) : undefined,
       decision: name.slice(0, 400),
       action: get(r, "description").replace(/\s+/g, " ").slice(0, 400),
       owner: (assigned[0] || "").slice(0, 80),
       due,
-      date: toISO(get(r, "created date")),
+      date: toISO(get(r, "created")),
       status: done ? "done" : late ? "red" : "green",
       note: noteBits.join(" · ").slice(0, 400),
       linked: "",
       meeting: "",
     });
   }
+  tasks.sheet = sheetName;
   return tasks;
 }

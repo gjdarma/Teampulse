@@ -517,7 +517,7 @@ function importPlanner(ctx) {
     const use = tasks.filter((t) => incDone || t.status !== "done");
     const existing = new Set((ctx.reg.items || []).map((i) => i.id));
     const updates = use.filter((t) => t.id && existing.has(t.id)).length;
-    bg.querySelector("#ppreview").innerHTML = `<div class="callout navy small"><strong>${tasks.length} tasks found.</strong> ${tasks.filter((t) => t.status === "done").length} completed, ${tasks.filter((t) => t.status === "red").length} late.</div>
+    bg.querySelector("#ppreview").innerHTML = `<div class="callout navy small"><strong>${tasks.length} tasks found${tasks.sheet ? ` in the "${esc(tasks.sheet)}" tab` : ""}.</strong> ${tasks.filter((t) => t.status === "done").length} completed, ${tasks.filter((t) => t.status === "red").length} late.</div>
       <label style="display:flex;gap:8px;align-items:center;font-weight:500;margin:12px 0"><input type="checkbox" id="pdone" ${incDone ? "checked" : ""}> Include completed tasks</label>
       <p class="small">${use.length} will be imported${updates ? ` (${updates} already in the register will be updated, not duplicated)` : ""}.</p>
       <div style="max-height:220px;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:6px 10px">${use.slice(0, 50).map((t) => `<div class="small" style="padding:4px 0;border-bottom:1px solid var(--line)"><span class="light ${t.status}"></span> ${esc(t.decision)} <span class="muted">· ${esc(t.owner || "no owner")}${t.due ? " · due " + esc(t.due) : ""}</span></div>`).join("")}</div>`;
